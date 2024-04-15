@@ -4,65 +4,74 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
-
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestRateLimiter_Middleware(t *testing.T) {
-	// Configurações do rate limiter para os testes
-	cfg := Config{
-		MaxRequests:      2,
-		IPBlockPeriod:    1 * time.Second,
-		TokenBlockPeriod: 1 * time.Second,
-	}
+	// Criar uma instância do RateLimiter
+	limiter := NewRateLimiter(DefaultConfig)
 
-	// Cria um novo rate limiter
-	limiter := NewRateLimiter(cfg)
-
-	// Configuração do servidor Gin para os testes
-	router := gin.New()
-	router.Use(limiter.Middleware())
-
-	// Rota de teste
-	router.GET("/test", func(c *gin.Context) {
-		c.String(http.StatusOK, "Test")
+	// Criar um handler de teste
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Test response"))
 	})
 
-	// Teste de solicitação dentro do limite
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Teste de solicitação excedendo o limite por IP
-	req = httptest.NewRequest("GET", "/test", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	req = httptest.NewRequest("GET", "/test", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
-
-	// Teste de solicitação excedendo o limite por Token
-	req = httptest.NewRequest("GET", "/test", nil)
+	// Criar um request de teste com IP e token
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
 	req.Header.Set("API_KEY", "test_token")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
 
-	req = httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("API_KEY", "test_token")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	// Criar um ResponseWriter de teste
+	rr := httptest.NewRecorder()
 
-	req = httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("API_KEY", "test_token")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	// Chamar o middleware
+	limiter.Middleware(handler).ServeHTTP(rr, req)
+
+	// Verificar o código de status
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("Handler retornou código de status errado: esperado %v, recebido %v", http.StatusOK, status)
+	}
+
+	// Verificar o corpo da resposta
+	expected := "Test response"
+	if rr.Body.String() != expected {
+		t.Errorf("Handler retornou corpo de resposta errado: esperado %v, recebido %v", expected, rr.Body.String())
+	}
+}
+
+func TestRateLimiter_Integration(t *testing.T) {
+	// Configurar o RateLimiter
+	limiter := NewRateLimiter(DefaultConfig)
+	limiter.SetTokenRateLimit("test_token", DefaultConfig)
+
+	// Iniciar o servidor HTTP de teste
+	server := httptest.NewServer(limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Test response"))
+	})))
+	defer server.Close()
+
+	// Criar um client HTTP para enviar solicitações para o servidor de teste
+	client := &http.Client{}
+
+	// Enviar várias solicitações para testar os limites
+	for i := 0; i < 105; i++ {
+		req, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("API_KEY", "test_token")
+		_, err = client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Verificar se o servidor respondeu conforme o esperado
+	resp, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("Esperado status de erro 429, recebido %d", resp.StatusCode)
+	}
 }
