@@ -1,18 +1,12 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"net"
 	"net/http"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi"
-	"github.com/go-chi/chi/middleware"
-	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
 )
 
@@ -30,7 +24,6 @@ type RateLimiter struct {
 	TokenRateLimits map[string]TokenRateLimit // Rate limits por token
 	IPBlockList     map[string]time.Time      // Lista de IPs bloqueados
 	TokenBlockList  map[string]time.Time      // Lista de tokens bloqueados
-	TokenConfigs    map[string]Config         // Configuração específica por token
 	mu              sync.Mutex                // Mutex para sincronização de acesso
 }
 
@@ -77,14 +70,10 @@ func (limiter *RateLimiter) Middleware(next http.Handler) http.Handler {
 			// Verifica se há um rate limiter para este token
 			tokenRateLimit, ok := limiter.TokenRateLimits[token]
 			if !ok {
-				// Se não houver, usa a configuração padrão ou configuração específica do token
-				config := limiter.Config // Configuração padrão
-				if cfg, exists := limiter.TokenConfigs[token]; exists {
-					config = cfg // Configuração específica do token
-				}
+				// Se não houver, cria um novo TokenRateLimit
 				tokenRateLimit = TokenRateLimit{
-					Config:  &config,
-					Limiter: rate.NewLimiter(rate.Limit(config.MaxRequests), 1),
+					Config:  &limiter.Config,
+					Limiter: rate.NewLimiter(rate.Limit(limiter.Config.MaxRequests), 1),
 				}
 				limiter.TokenRateLimits[token] = tokenRateLimit
 			}
@@ -117,36 +106,24 @@ func (limiter *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 func main() {
-	// Carrega variáveis de ambiente de um arquivo .env, se existir
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found, using default configurations")
+	// Configuração do Rate Limiter
+	config := Config{
+		MaxRequests:      100,             // Número máximo de requisições permitidas por segundo
+		IPBlockPeriod:    5 * time.Minute, // Período de bloqueio para IPs
+		TokenBlockPeriod: 5 * time.Minute, // Período de bloqueio para tokens
 	}
 
-	// Configurações padrão
-	defaultConfig := Config{
-		MaxRequests:      getEnvInt("MAX_REQUESTS", 10),                       // Número máximo de requisições permitidas por segundo
-		IPBlockPeriod:    getEnvDuration("IP_BLOCK_PERIOD", 1*time.Minute),    // Período de bloqueio para IPs
-		TokenBlockPeriod: getEnvDuration("TOKEN_BLOCK_PERIOD", 1*time.Minute), // Período de bloqueio para tokens
-	}
-
-	// Inicializa o Rate Limiter
+	// Inicialização do Rate Limiter
 	limiter := &RateLimiter{
-		Config:          defaultConfig,
+		Config:          config,
 		IPRateLimiters:  make(map[string]*rate.Limiter),
 		TokenRateLimits: make(map[string]TokenRateLimit),
 		IPBlockList:     make(map[string]time.Time),
 		TokenBlockList:  make(map[string]time.Time),
-		TokenConfigs:    make(map[string]Config),
 	}
 
-	// Configurações específicas por token
-	// Aqui você pode definir configurações específicas para cada token, se necessário
-	// Exemplo: limiter.TokenConfigs["token1"] = Config{MaxRequests: 50, IPBlockPeriod: 1*time.Minute, TokenBlockPeriod: 1*time.Minute}
-
-	// Configura o roteador Chi
+	// Configuração do roteador Chi
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
 	r.Use(limiter.Middleware)
 
 	// Rota de exemplo
@@ -155,36 +132,5 @@ func main() {
 	})
 
 	// Servidor HTTP na porta 8080
-	log.Println("Server started on port 8080")
 	http.ListenAndServe(":8080", r)
-}
-
-// getEnvInt retorna o valor da variável de ambiente como um inteiro, ou o valor padrão se não estiver definido ou for inválido
-func getEnvInt(key string, defaultValue int) int {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.Atoi(valueStr)
-	fmt.Println("Value:", value)
-	if err != nil {
-		log.Printf("Invalid value for %s, using default value %d\n", key, defaultValue)
-		return defaultValue
-	}
-	return value
-}
-
-// getEnvDuration retorna o valor da variável de ambiente como uma duração, ou o valor padrão se não estiver definido ou for inválido
-func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := time.ParseDuration(valueStr)
-	if err != nil {
-		log.Printf("Invalid value for %s, using default value %s\n", key, defaultValue)
-		return defaultValue
-	}
-	return value
-
 }
