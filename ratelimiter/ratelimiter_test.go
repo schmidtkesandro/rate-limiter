@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schmidtkesandro/rate-limiter/ratelimiter/ratelimiter"
+	"github.com/schmidtkesandro/rate-limiter/tree/main/ratelimiter"
 	"github.com/stretchr/testify/assert"
 )
 
