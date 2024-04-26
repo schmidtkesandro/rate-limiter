@@ -70,7 +70,7 @@ func (limiter *RateLimiter) CheckRateLimit(ip, token string) error {
 		if !ok {
 			lim, ok = limiter.TokenRateLimit("Padrao")
 			if !ok {
-
+				// Caso não encontre o token utiliza o valor Default
 				lim, ok = limiter.TokenRateLimit("Default")
 				if !ok {
 					// Retorna um erro se o token não for válido
@@ -154,6 +154,7 @@ func (limiter *RateLimiter) isIPBlocked(ip string) bool {
 	// Verifica se o IP está na lista de IPs bloqueados
 	if blockTime, ok := limiter.BlockedIPs[ip]; ok {
 		// Verifica se o período de bloqueio já expirou
+		fmt.Println("limite IP: ", limiter.Config.IPBlockPeriod)
 		if time.Since(blockTime) < limiter.Config.IPBlockPeriod {
 			return true
 		}
@@ -230,12 +231,14 @@ func LoadTokenConfigs(cfg Config) map[string]TokenConfig {
 			TokenBlockPeriod: tokenBlockPeriod,
 		}
 	}
+	// // Armazenar as configurações Default no mapa para os tokens que não possuem configuração específica
+	// tokenConfigs["Default"] = TokenConfig{
+	// 	MaxRequests:      cfg.MaxRequests,
+	// 	IPBlockPeriod:    cfg.IPBlockPeriod,
+	// 	TokenBlockPeriod: cfg.TokenBlockPeriod,
+	// }
 	// Armazenar as configurações Default no mapa para os tokens que não possuem configuração específica
-	tokenConfigs["Default"] = TokenConfig{
-		MaxRequests:      cfg.MaxRequests,
-		IPBlockPeriod:    cfg.IPBlockPeriod,
-		TokenBlockPeriod: cfg.TokenBlockPeriod,
-	}
+	tokenConfigs["Default"] = cfg.ToTokenConfigDefault()
 	for tokenName, config := range tokenConfigs {
 		log.Printf("Token: %s, Max Requests: %d, IP Block Period: %s, Token Block Period: %s",
 			tokenName, config.MaxRequests, config.IPBlockPeriod.String(), config.TokenBlockPeriod.String())
@@ -243,13 +246,22 @@ func LoadTokenConfigs(cfg Config) map[string]TokenConfig {
 	return tokenConfigs
 }
 
+// ToTokenConfig converte a estrutura Config em TokenConfig
+func (cfg Config) ToTokenConfigDefault() TokenConfig {
+	return TokenConfig{
+		MaxRequests:      cfg.MaxRequests,
+		IPBlockPeriod:    cfg.IPBlockPeriod,
+		TokenBlockPeriod: cfg.TokenBlockPeriod,
+	}
+}
+
 func main() {
 
 	//Configuração padrão
 	cfg := Config{
-		MaxRequests:      1,               // Número máximo de requisições permitidas por segundo
-		IPBlockPeriod:    1 * time.Minute, // Período de bloqueio para IPs
-		TokenBlockPeriod: 1 * time.Minute, // Período de bloqueio para tokens
+		MaxRequests:      4,               // Número máximo de requisições permitidas por segundo
+		IPBlockPeriod:    2 * time.Minute, // Período de bloqueio para IPs
+		TokenBlockPeriod: 3 * time.Minute, // Período de bloqueio para tokens
 	}
 	// Carrega as configurações dos tokens do arquivo .env
 	tokenConfigs := LoadTokenConfigs(cfg)
