@@ -32,7 +32,7 @@ type TokenConfig struct {
 
 // RateLimiter implementa um Rate Limiter para o Chi
 type RateLimiter struct {
-	Config         Config                   // Configuração do Rate Limiter
+	Config         Config                   // Configuração padrão do Rate Limiter
 	IPRateLimiters map[string]*rate.Limiter // Rate limiters por IP
 	TokenLimits    map[string]*rate.Limiter // Configurações de token
 	mu             sync.Mutex               // Mutex para sincronização de acesso
@@ -60,64 +60,62 @@ func getIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// CheckRateLimit verifica se uma solicitação excede o limite de taxa
+func (limiter *RateLimiter) CheckRateLimit(ip, token string) error {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+
+	if token != "" {
+		lim, ok := limiter.TokenRateLimit(token)
+		if !ok {
+			lim, ok = limiter.TokenRateLimit("Padrao")
+			if !ok {
+
+				lim, ok = limiter.TokenRateLimit("Default")
+				if !ok {
+					// Retorna um erro se o token não for válido
+					return fmt.Errorf("invalid token")
+				}
+			}
+		}
+		if limiter.isTokenBlocked(token) {
+			// Retorna um erro se o token estiver bloqueado
+			return fmt.Errorf("token blocked")
+		}
+
+		if !lim.Allow() {
+			// Bloqueia o token e retorna um erro se a solicitação exceder o limite
+			limiter.blockToken(token)
+			return fmt.Errorf("too many requests")
+		}
+	} else {
+		if limiter.isIPBlocked(ip) {
+			// Retorna um erro se o IP estiver bloqueado
+			return fmt.Errorf("IP blocked")
+		}
+
+		if !limiter.IPRateLimiter(ip).Allow() {
+			// Bloqueia o IP e retorna um erro se a solicitação exceder o limite
+			limiter.blockIP(ip)
+			return fmt.Errorf("too many requests")
+		}
+	}
+
+	return nil
+}
+
 // Middleware implementa o middleware do Rate Limiter para o Chi
 func (limiter *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Obtém apenas o endereço IP do cliente sem a porta
 		ip := getIP(r)
-
-		limiter.mu.Lock()
-		defer limiter.mu.Unlock()
 		// Verifica o token de acesso no header
 		token := r.Header.Get("API_KEY")
-
-		if token != "" {
-			// Verifica se há um rate limiter para este token
-			lim, ok := limiter.TokenRateLimit(token)
-			if !ok {
-				lim, ok = limiter.TokenRateLimit("Padraos")
-				if !ok {
-
-					http.Error(w, "Invalid token", http.StatusUnauthorized)
-					return
-				}
-			}
-
-			// Verifica se o IP está bloqueado
-			if limiter.isIPBlocked(ip) {
-				http.Error(w, "IP blocked", http.StatusTooManyRequests)
-				return
-			}
-
-			// Verifica se o token está bloqueado
-			if limiter.isTokenBlocked(token) {
-				http.Error(w, "Token blocked", http.StatusTooManyRequests)
-				return
-			}
-
-			// Verifica se a requisição excede o limite
-			if !lim.Allow() {
-				limiter.blockToken(token)
-				http.Error(w, "Too many requests", http.StatusTooManyRequests)
-				return
-			}
-
-		} else {
-			// Verifica se o IP está na lista de bloqueio
-			if limiter.isIPBlocked(ip) {
-				http.Error(w, "Este IP está bloqueado - muitas tentativas por segundo", http.StatusTooManyRequests)
-				return
-			}
-			// Se não houver token, usa o rate limiter baseado no IP
-			// Tenta pegar uma permissão do rate limiter do IP
-			if !limiter.IPRateLimiter(ip).Allow() {
-				// Bloqueia o IP e retorna um erro
-				limiter.blockIP(ip)
-				http.Error(w, "you have reached the maximum number of requests allowed from this IP", http.StatusTooManyRequests)
-				return
-			}
+		// Verifica se a solicitação excede o limite de taxa
+		if err := limiter.CheckRateLimit(ip, token); err != nil {
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
 		}
-
 		// Continua o fluxo normal se todas as verificações passaram
 		next.ServeHTTP(w, r)
 	})
@@ -133,21 +131,6 @@ func (limiter *RateLimiter) IPRateLimiter(ip string) *rate.Limiter {
 	return lim
 }
 
-// func (limiter *RateLimiter) getTokenConfig(token string) TokenConfig {
-// 	maxRequests, ipBlockPeriod, tokenBlockPeriod, found := limiter.TokenLimits[token].Values()
-// 	if !found {
-// 		maxRequests, ipBlockPeriod, tokenBlockPeriod, found = limiter.TokenLimits["padrao"].Values()
-// 		if !found {
-// 			// Tratmar o caso em que não existem valores para o token
-// 			maxRequests = 1
-// 			ipBlockPeriod = 2
-// 			tokenBlockPeriod = 2
-// 		}
-
-// 	}
-// 	return TokenConfig{maxRequests, ipBlockPeriod, tokenBlockPeriod}
-// }
-
 // TokenRateLimit retorna o rate limiter para o token especificado
 func (limiter *RateLimiter) TokenRateLimit(token string) (*rate.Limiter, bool) {
 	// Verifica se há um rate limiter para este token
@@ -156,7 +139,6 @@ func (limiter *RateLimiter) TokenRateLimit(token string) (*rate.Limiter, bool) {
 		// Se não houver uma configuração para o token, retorna false
 		return nil, false
 	}
-
 	// Obtém o rate limiter para este token
 	lim, ok := limiter.TokenLimits[token]
 	if !ok {
@@ -164,7 +146,6 @@ func (limiter *RateLimiter) TokenRateLimit(token string) (*rate.Limiter, bool) {
 		lim = rate.NewLimiter(rate.Limit(config.MaxRequests), 1)
 		limiter.TokenLimits[token] = lim
 	}
-
 	return lim, true
 }
 
@@ -204,13 +185,8 @@ func (limiter *RateLimiter) isTokenBlocked(token string) bool {
 	return false
 }
 
-// blockToken bloqueia o token na lista de bloqueio
-// func (limiter *RateLimiter) blockToken(token string) {
-// 	limiter.BlockedTokens[token] = time.Now()
-// }
-
 // LoadTokenConfigs lê as informações do arquivo .env e retorna um mapa indexado pelo NAME_TOKEN
-func LoadTokenConfigs() map[string]TokenConfig {
+func LoadTokenConfigs(cfg Config) map[string]TokenConfig {
 	fmt.Println("LoadTokenConfigs")
 	err := godotenv.Load()
 	if err != nil {
@@ -222,23 +198,18 @@ func LoadTokenConfigs() map[string]TokenConfig {
 	for i := 0; i < 10; i++ {
 		// Nome do token
 		tokenName := os.Getenv("NAME" + strconv.Itoa(i) + "_TOKEN")
-		// fmt.Println("inicio token", "NAME"+strconv.Itoa(i)+"_TOKEN")
 		if tokenName == "" {
 			// Se não houver mais tokens, saia do loop
 			break
 		}
-		// fmt.Println("token", tokenName)
 		// Configurações do token
 		maxRequestsStr := os.Getenv("TOKEN" + strconv.Itoa(i) + "_MAX_REQUESTS")
-		// fmt.Println("Max requests: ", maxRequestsStr)
 		maxRequests, err := strconv.Atoi(maxRequestsStr)
 		if err != nil {
 			log.Printf("Error converting max requests for token %s: %v", tokenName, err)
 			continue
 		}
-
 		ipBlockPeriodStr := os.Getenv("TOKEN" + strconv.Itoa(i) + "_IP_BLOCK_PERIOD")
-		// fmt.Println("ipBlockPeriodStr: ", ipBlockPeriodStr)
 		ipBlockPeriod, err := time.ParseDuration(ipBlockPeriodStr)
 		if err != nil {
 			log.Printf("Error parsing IP block period for token %s: %v", tokenName, err)
@@ -246,7 +217,6 @@ func LoadTokenConfigs() map[string]TokenConfig {
 		}
 
 		tokenBlockPeriodStr := os.Getenv("TOKEN" + strconv.Itoa(i) + "_TOKEN_BLOCK_PERIOD")
-		// fmt.Println("tokenBlockPeriodStr:", tokenBlockPeriodStr)
 		tokenBlockPeriod, err := time.ParseDuration(tokenBlockPeriodStr)
 		if err != nil {
 			log.Printf("Error parsing token block period for token %s: %v", tokenName, err)
@@ -260,6 +230,12 @@ func LoadTokenConfigs() map[string]TokenConfig {
 			TokenBlockPeriod: tokenBlockPeriod,
 		}
 	}
+	// Armazenar as configurações Default no mapa para os tokens que não possuem configuração específica
+	tokenConfigs["Default"] = TokenConfig{
+		MaxRequests:      cfg.MaxRequests,
+		IPBlockPeriod:    cfg.IPBlockPeriod,
+		TokenBlockPeriod: cfg.TokenBlockPeriod,
+	}
 	for tokenName, config := range tokenConfigs {
 		log.Printf("Token: %s, Max Requests: %d, IP Block Period: %s, Token Block Period: %s",
 			tokenName, config.MaxRequests, config.IPBlockPeriod.String(), config.TokenBlockPeriod.String())
@@ -268,8 +244,6 @@ func LoadTokenConfigs() map[string]TokenConfig {
 }
 
 func main() {
-	// Carrega as configurações dos tokens do arquivo .env
-	tokenConfigs := LoadTokenConfigs()
 
 	//Configuração padrão
 	cfg := Config{
@@ -277,6 +251,8 @@ func main() {
 		IPBlockPeriod:    1 * time.Minute, // Período de bloqueio para IPs
 		TokenBlockPeriod: 1 * time.Minute, // Período de bloqueio para tokens
 	}
+	// Carrega as configurações dos tokens do arquivo .env
+	tokenConfigs := LoadTokenConfigs(cfg)
 
 	// Inicializa o rate limiter
 	limiter := &RateLimiter{

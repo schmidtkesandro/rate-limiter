@@ -6,125 +6,88 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi"
 	"golang.org/x/time/rate"
 )
 
-func TestRateLimiterMiddleware(t *testing.T) {
-	limiter := &RateLimiter{
+func TestCheckRateLimit(t *testing.T) {
+	limiter := RateLimiter{
 		Config: Config{
 			MaxRequests:      2,
-			IPBlockPeriod:    5 * time.Second,
-			TokenBlockPeriod: 5 * time.Second,
+			IPBlockPeriod:    time.Minute,
+			TokenBlockPeriod: time.Minute,
 		},
-		IPRateLimiters: make(map[string]*rate.Limiter),
-		TokenLimits:    make(map[string]TokenConfig),
-		BlockedIPs:     make(map[string]time.Time),
-		BlockedTokens:  make(map[string]time.Time),
+		TokenConfigs: map[string]TokenConfig{
+			"default": {
+				MaxRequests:      1,
+				IPBlockPeriod:    time.Minute,
+				TokenBlockPeriod: time.Minute,
+			},
+		},
 	}
 
-	r := chi.NewRouter()
-	r.Use(limiter.Middleware)
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("OK"))
-	})
+	ip := "127.0.0.1"
+	token := ""
 
-	tests := []struct {
-		name         string
-		requests     int
-		expectedCode int
-	}{
-		{"BelowLimit", 1, http.StatusOK},
-		{"AboveLimit", 3, http.StatusTooManyRequests},
+	// Teste limite de IP
+	if err := limiter.CheckRateLimit(ip, token); err != nil {
+		t.Errorf("Expected nil error, got %v", err)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			req, err := http.NewRequest("GET", "/", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+	// Teste limite de token
+	limiter.TokenLimits = map[string]*rate.Limiter{"test": rate.NewLimiter(rate.Limit(1), 1)}
+	token = "test"
+	if err := limiter.CheckRateLimit(ip, token); err != nil {
+		t.Errorf("Expected nil error, got %v", err)
+	}
 
-			for i := 0; i < test.requests; i++ {
-				resp := httptest.NewRecorder()
-				r.ServeHTTP(resp, req)
-				if resp.Code != test.expectedCode {
-					t.Errorf("Expected status code %d; got %d", test.expectedCode, resp.Code)
-				}
-			}
-		})
+	// Teste limite excedido de token
+	if err := limiter.CheckRateLimit(ip, token); err == nil {
+		t.Errorf("Expected error, got nil")
 	}
 }
 
-// package main
+func TestMiddleware(t *testing.T) {
+	limiter := RateLimiter{
+		Config: Config{
+			MaxRequests:      2,
+			IPBlockPeriod:    time.Minute,
+			TokenBlockPeriod: time.Minute,
+		},
+		TokenConfigs: map[string]TokenConfig{
+			"default": {
+				MaxRequests:      1,
+				IPBlockPeriod:    time.Minute,
+				TokenBlockPeriod: time.Minute,
+			},
+		},
+	}
 
-// import (
-// 	"net/http"
-// 	"net/http/httptest"
-// 	"testing"
-// 	"time"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
-// 	"golang.org/x/time/rate"
-// )
+	r := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
 
-// func TestRateLimiterMiddleware(t *testing.T) {
-// 	// Configuração padrão
-// 	defaultConfig := Config{
-// 		MaxRequests:      12,              // Limite de 2 requisições por segundo
-// 		IPBlockPeriod:    5 * time.Minute, // Período de bloqueio para IPs: 5 minutos
-// 		TokenBlockPeriod: 5 * time.Minute, // Período de bloqueio para tokens: 5 minutos
-// 	}
+	// Teste limite de IP
+	limiter.Middleware(handler).ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
+	}
 
-// 	// Inicializa o Rate Limiter
-// 	limiter := &RateLimiter{
-// 		Config:         defaultConfig,
-// 		IPRateLimiters: make(map[string]*rate.Limiter),
-// 		TokenLimits:    make(map[string]TokenConfig),
-// 		BlockedIPs:     make(map[string]time.Time),
-// 		BlockedTokens:  make(map[string]time.Time),
-// 	}
+	// Teste limite de token
+	r.Header.Set("API_KEY", "test")
+	w = httptest.NewRecorder()
+	limiter.TokenLimits = map[string]*rate.Limiter{"test": rate.NewLimiter(rate.Limit(1), 1)}
+	limiter.Middleware(handler).ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
+	}
 
-// 	// Configura um servidor de teste com o middleware do rate limiter
-// 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		w.Write([]byte("OK"))
-// 	})
-// 	testServer := httptest.NewServer(limiter.Middleware(handler))
-// 	defer testServer.Close()
-
-// 	// Cria um cliente HTTP para o servidor de teste
-// 	client := &http.Client{}
-
-// 	// Testa com uma requisição válida
-// 	req, err := http.NewRequest("GET", testServer.URL, nil)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	defer resp.Body.Close()
-// 	if resp.StatusCode != http.StatusOK {
-// 		t.Errorf("Expected status code %d, got %d", http.StatusOK, resp.StatusCode)
-// 	}
-
-// 	// Testa com uma segunda requisição válida
-// 	resp, err = client.Do(req)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	defer resp.Body.Close()
-// 	if resp.StatusCode != http.StatusOK {
-// 		t.Errorf("Expected status code %d, got %d", http.StatusOK, resp.StatusCode)
-// 	}
-
-// 	// Testa com uma terceira requisição inválida (deve retornar 429 - Too Many Requests)
-// 	resp, err = client.Do(req)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	defer resp.Body.Close()
-// 	if resp.StatusCode != http.StatusTooManyRequests {
-// 		t.Errorf("Expected status code %d, got %d", http.StatusTooManyRequests, resp.StatusCode)
-// 	}
-// }
+	// Teste limite excedido de token
+	w = httptest.NewRecorder()
+	limiter.Middleware(handler).ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected status code %d, got %d", http.StatusTooManyRequests, w.Code)
+	}
+}
