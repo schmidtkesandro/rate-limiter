@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/schmidtkesandro/rate-limiter/ratelimiter/ratelimiter"
 	"github.com/stretchr/testify/assert"
 )
 
