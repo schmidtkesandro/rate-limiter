@@ -1,10 +1,9 @@
-package main
+package ratelimiter_test
 
 import (
 	"testing"
 	"time"
 
-	"github.com/sandroschmidtke/go/ratelimiter"
 	"github.com/stretchr/testify/assert"
 )
 
