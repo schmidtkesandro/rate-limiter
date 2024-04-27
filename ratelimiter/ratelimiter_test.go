@@ -4,13 +4,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schmidtkesandro/rate-limiter/tree/main/ratelimiter"
+	"github.com/schmidtkesandro/rate-limiter/ratelimiter"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRateLimiter_LimitByIP(t *testing.T) {
 	// Configuração do rate limiter com limite de 5 requisições por segundo por IP
-	limiter := ratelimiter.NewRateLimiter(5, time.Second, 5*time.Minute)
+	limiter := ratelimiter.NewRateLimiter(5, time.Second, 1*time.Minute)
 
 	// Teste de limitação por IP
 	ip := "192.168.1.1"
@@ -21,7 +21,7 @@ func TestRateLimiter_LimitByIP(t *testing.T) {
 	assert.False(t, limiter.Allow(ip), "A sexta requisição deve ser bloqueada")
 
 	// Aguarda o tempo de expiração
-	time.Sleep(5 * time.Minute)
+	time.Sleep(1 * time.Minute)
 
 	// Após o tempo de expiração, as requisições devem ser permitidas novamente
 	assert.True(t, limiter.Allow(ip), "As requisições devem ser permitidas após o tempo de expiração")
@@ -29,7 +29,7 @@ func TestRateLimiter_LimitByIP(t *testing.T) {
 
 func TestRateLimiter_LimitByToken(t *testing.T) {
 	// Configuração do rate limiter com limite de 10 requisições por segundo por token
-	limiter := ratelimiter.NewRateLimiter(10, time.Second, 5*time.Minute)
+	limiter := ratelimiter.NewRateLimiter(10, time.Second, 1*time.Minute)
 
 	// Teste de limitação por token
 	token := "abc123"
@@ -40,7 +40,7 @@ func TestRateLimiter_LimitByToken(t *testing.T) {
 	assert.False(t, limiter.Allow(token), "A décima primeira requisição deve ser bloqueada")
 
 	// Aguarda o tempo de expiração
-	time.Sleep(5 * time.Minute)
+	time.Sleep(1 * time.Minute)
 
 	// Após o tempo de expiração, as requisições devem ser permitidas novamente
 	assert.True(t, limiter.Allow(token), "As requisições devem ser permitidas após o tempo de expiração")
