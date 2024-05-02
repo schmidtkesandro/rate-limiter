@@ -67,6 +67,6 @@ func TestRateLimiter_LimitByTokenandIPblocked(t *testing.T) {
 	time.Sleep(1 * time.Minute)
 
 	// Após o tempo de expiração, as requisições devem ser permitidas novamente
-	assert.True(t, limiter.Allow(token), "A requisição deve ser permitida após o tempo de expiração do token")
+	assert.True(t, limiter.Allow(token), "A requisição deve ser permitida após o tempo de expiração do Token")
 	assert.True(t, limiter.Allow(ip), "A requisição deve ser permitida após expiração do IP")
 }

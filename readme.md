@@ -36,6 +36,7 @@ TOKEN3_IP_BLOCK_PERIOD=1m
 TOKEN3_TOKEN_BLOCK_PERIOD=1m
 
 para cada conjunto de variáveis de 0 a 9(para aumentar a quantidade de token alterar ), serão passadas as informações do nome do token, a quantidade máxima de requisições por segundo e o tempo de bloqueio quando ultrapassar o limite. Se não for definido um token "padrao" o programa pegará o Default definido dentro do programa:
+
   MaxRequests:      4,               // Número máximo de requisições permitidas por segundo
   IPBlockPeriod:    2 *time.Minute, // Período de bloqueio para IPs
   TokenBlockPeriod: 3* time.Minute, // Período de bloqueio para tokens

@@ -63,19 +63,10 @@ func (limiter *RateLimiter) IPRateLimit(ip string) (*rate.Limiter, bool) {
 	}
 	lim, ok := limiter.IPRateLimiters[ip]
 	if !ok {
-		fmt.Println("Passei aqui ip 1 com ok = ", ok, config.MaxRequests)
-		fmt.Println("limiter.Config.MaxRequests", limiter.Config.MaxRequests)
 		lim = rate.NewLimiter(rate.Limit(1), config.MaxRequests)
 		limiter.IPRateLimiters[ip] = lim
 	}
-	remainingTokens := lim.Burst()
-	fmt.Printf("Remaining IP: %d\n", remainingTokens)
 	return lim, true
-}
-
-type TokenLimit struct {
-	Limiter          *rate.Limiter
-	TokenBlockPeriod time.Duration
 }
 
 // TokenRateLimit retorna o rate limiter para o token especificado
@@ -96,26 +87,9 @@ func (limiter *RateLimiter) TokenRateLimit(token string) (*rate.Limiter, bool) {
 	lim, ok := limiter.TokenLimits[token]
 	if !ok {
 		// Se não houver um rate limiter para este token, cria um novo
-		fmt.Println("Passei aqui ", token, " com ok = ", ok, config.MaxRequests)
-		fmt.Println("limiter.Config.MaxRequests", limiter.Config.MaxRequests)
 		lim = rate.NewLimiter(rate.Limit(1), config.MaxRequests)
-		// Execute some actions
-		// for i := 0; i < 5; i++ {
-		// 	if lim.Allow() {
-		// 		fmt.Printf("Action %d allowed\n", i+1)
-		// 	} else {
-		// 		fmt.Printf("Action %d blocked\n", i+1)
-
-		// 	}
-		// 	remainingTokens := lim.Burst()
-		// 	fmt.Printf("Remaining tokens: %d\n", remainingTokens)
-		// }
 		limiter.TokenLimits[token] = lim
-		// Define o TokenBlockPeriod para o rate limiter
-
 	}
-	remainingTokens := lim.Burst()
-	fmt.Printf("Remaining tokens: %d\n", remainingTokens)
 	return lim, true
 }
 
@@ -155,13 +129,10 @@ func (limiter *RateLimiter) blockIP(ip string) {
 	ctx := context.Background()
 	// Obter o tempo de bloqueio do token a partir das configurações
 	blockPeriod := limiter.TokenConfigs["Default"].IPBlockPeriod
-	fmt.Println("blockPeriod: ", blockPeriod)
 	// Definir o tempo de desbloqueio do token
 	unblockTime := time.Now().Add(blockPeriod)
-	fmt.Println("unblockTime: ", unblockTime)
 	// Armazenar o tempo de desbloqueio na lista de tokens bloqueados no Redis
 	key := "blocked:" + ip
-	fmt.Println("key: ", key)
 	if err := limiter.RedisClient.Set(ctx, key, unblockTime.Unix(), blockPeriod).Err(); err != nil {
 		log.Printf("Error blocking ip %s: %v", ip, err)
 	}
@@ -190,13 +161,10 @@ func (limiter *RateLimiter) blockToken(token string) {
 
 		}
 	}
-	fmt.Println("blockPeriod: ", blockPeriod)
 	// Definir o tempo de desbloqueio do token
 	unblockTime := time.Now().Add(blockPeriod)
-	fmt.Println("unblockTime: ", unblockTime)
 	// Armazenar o tempo de desbloqueio na lista de tokens bloqueados no Redis
 	key := "blocked:" + token
-	fmt.Println("key: ", key)
 	if err := limiter.RedisClient.Set(ctx, key, unblockTime.Unix(), blockPeriod).Err(); err != nil {
 		log.Printf("Error blocking token %s: %v", token, err)
 	}
@@ -238,10 +206,10 @@ func (limiter *RateLimiter) isTokenBlocked(token string) bool {
 
 // LoadTokenConfigs lê as informações do arquivo .env e retorna um mapa indexado pelo NAME_TOKEN
 func LoadTokenConfigs(cfg Config, numeroMaximodeTokens int) map[string]TokenConfig {
-	fmt.Println("LoadTokenConfigs")
+
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		log.Println("Error loading .env file - not found")
 	}
 	// Variáveis para armazenar as configurações dos tokens
 	tokenConfigs := make(map[string]TokenConfig)
@@ -288,6 +256,7 @@ func LoadTokenConfigs(cfg Config, numeroMaximodeTokens int) map[string]TokenConf
 	// Armazenar as configurações Default no mapa para os tokens que não possuem configuração específica
 	tokenConfigs["Default"] = defaultTokenConfig
 	//mostra as configurações do arquivo .env
+	log.Println("Configurações carregadas do arquivo .env e configuração Default")
 	for tokenName, config := range tokenConfigs {
 		log.Printf("Token: %s, Max Requests: %d, IP Block Period: %s, Token Block Period: %s",
 			tokenName, config.MaxRequests, config.IPBlockPeriod.String(), config.TokenBlockPeriod.String())
@@ -310,10 +279,6 @@ func (limiter *RateLimiter) CheckRateLimit(ip, token string) error {
 			// Retorna um erro se o token não for válido
 			return fmt.Errorf("invalid ip")
 		}
-		// if limiter.isIPBlocked(ip) {
-		// 	// Retorna um erro se o token estiver bloqueado
-		// 	return fmt.Errorf("ip blocked")
-		// }
 
 		if !lim.Allow() {
 			// Bloqueia o ip e retorna um erro se a solicitação exceder o limite
@@ -321,22 +286,17 @@ func (limiter *RateLimiter) CheckRateLimit(ip, token string) error {
 			return fmt.Errorf("ip - too many requests")
 		}
 	} else {
+		if limiter.isTokenBlocked(token) {
+			// Retorna um erro se o token estiver bloqueado
+			return fmt.Errorf("token blocked")
+		}
 		lim, ok := limiter.TokenRateLimit(token)
 		if !ok {
 			// Retorna um erro se o token não for válido
 			return fmt.Errorf("invalid token")
 		}
-
-		if limiter.isTokenBlocked(token) {
-			// Retorna um erro se o token estiver bloqueado
-			return fmt.Errorf("token blocked")
-		}
-		remainingTokens := lim.Burst()
-		fmt.Printf("Remaining tokens antes Allow: %d\n", remainingTokens)
 		if !lim.Allow() {
 			// Bloqueia o token e retorna um erro se a solicitação exceder o limite
-			remainingTokens := lim.Burst()
-			fmt.Printf("Remaining tokens depois Allow: %d\n", remainingTokens)
 			limiter.blockToken(token)
 			return fmt.Errorf("token - too many requests")
 		}
@@ -370,11 +330,11 @@ func main() {
 
 	// Verifica a conexão com o servidor Redis
 	ctx := context.Background()
-	pong, err := client.Ping(ctx).Result()
+	_, err := client.Ping(ctx).Result()
 	if err != nil {
 		log.Fatalf("Error connecting to Redis: %v", err)
 	}
-	log.Printf("Connected to Redis: %s", pong)
+	log.Printf("Connected to Redis")
 
 	//Configuração padrão
 	cfg := Config{
