@@ -41,7 +41,59 @@ type RateLimiter struct {
 	BlockedIPs     map[string]time.Time     // IPs bloqueados e o momento em que foram bloqueados
 	BlockedTokens  map[string]time.Time     // Tokens bloqueados e o momento em que foram bloqueados
 	TokenConfigs   map[string]TokenConfig
-	RedisClient    *redis.Client // Cliente Redis
+	Storage        Storage // Interface para operações de persistência
+}
+
+// Storage define as operações de persistência relacionadas ao Redis
+type Storage interface {
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error
+	Del(ctx context.Context, keys ...string) (int64, error)
+	Expire(ctx context.Context, key string, expiration time.Duration) error
+}
+
+// RedisStorage implementa as operações de persistência usando o Redis
+type RedisStorage struct {
+	Client *redis.Client
+}
+
+// NewRedisStorage cria uma nova instância de RedisStorage com o cliente Redis fornecido.
+func NewBDStorage(client *redis.Client) *RedisStorage {
+	return &RedisStorage{
+		Client: client,
+	}
+}
+
+// Get implementa a operação de obter valor do Redis
+func (rs *RedisStorage) Get(ctx context.Context, key string) (string, error) {
+	return rs.Client.Get(ctx, key).Result()
+}
+
+// Set implementa a operação de definir valor no Redis
+func (rs *RedisStorage) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	return rs.Client.Set(ctx, key, value, expiration).Err()
+}
+
+// Del implementa a operação de excluir chaves do Redis
+func (rs *RedisStorage) Del(ctx context.Context, keys ...string) (int64, error) {
+	return rs.Client.Del(ctx, keys...).Result()
+}
+
+// Expire implementa a operação de definir tempo de expiração no Redis
+func (rs *RedisStorage) Expire(ctx context.Context, key string, expiration time.Duration) error {
+	return rs.Client.Expire(ctx, key, expiration).Err()
+}
+
+// NewRateLimiter cria uma nova instância de RateLimiter com o RedisStorage
+func NewRateLimiter(cfg Config, storage Storage) *RateLimiter {
+	return &RateLimiter{
+		Config:         cfg,
+		IPRateLimiters: make(map[string]*rate.Limiter),
+		TokenLimits:    make(map[string]*rate.Limiter),
+		BlockedIPs:     make(map[string]time.Time),
+		BlockedTokens:  make(map[string]time.Time),
+		Storage:        storage,
+	}
 }
 
 // getIP retorna o endereço IP do cliente
@@ -96,9 +148,8 @@ func (limiter *RateLimiter) TokenRateLimit(token string) (*rate.Limiter, bool) {
 // isIPBlocked verifica se o IP está na lista de bloqueio
 func (limiter *RateLimiter) isIPBlocked(ip string) bool {
 	// Verifica se o token está na lista de tokens bloqueados no Redis
-	blockTimeStr, err := limiter.RedisClient.Get(context.Background(), "blocked:"+ip).Result()
-	if err != nil && err != redis.Nil {
-		log.Printf("Error getting block time for ip %s: %v", ip, err)
+	blockTimeStr, err := limiter.Storage.Get(context.Background(), "blocked:"+ip)
+	if err != nil {
 		return false
 	}
 	if blockTimeStr != "" {
@@ -115,7 +166,7 @@ func (limiter *RateLimiter) isIPBlocked(ip string) bool {
 			return true
 		}
 		// Remove o token da lista de tokens bloqueados no Redis
-		_, err = limiter.RedisClient.Del(context.Background(), "blocked:"+ip).Result()
+		_, err = limiter.Storage.Del(context.Background(), "blocked:"+ip)
 		if err != nil {
 			log.Printf("Error removing ip %s from block list: %v", ip, err)
 		}
@@ -133,11 +184,11 @@ func (limiter *RateLimiter) blockIP(ip string) {
 	unblockTime := time.Now().Add(blockPeriod)
 	// Armazenar o tempo de desbloqueio na lista de tokens bloqueados no Redis
 	key := "blocked:" + ip
-	if err := limiter.RedisClient.Set(ctx, key, unblockTime.Unix(), blockPeriod).Err(); err != nil {
+	if err := limiter.Storage.Set(ctx, key, unblockTime.Unix(), blockPeriod); err != nil {
 		log.Printf("Error blocking ip %s: %v", ip, err)
 	}
 	// Definir o tempo de expiração para a chave
-	if err := limiter.RedisClient.Expire(ctx, key, blockPeriod).Err(); err != nil {
+	if err := limiter.Storage.Expire(ctx, key, blockPeriod); err != nil {
 		log.Printf("Error setting expiration for ip %s: %v", ip, err)
 	}
 }
@@ -165,11 +216,11 @@ func (limiter *RateLimiter) blockToken(token string) {
 	unblockTime := time.Now().Add(blockPeriod)
 	// Armazenar o tempo de desbloqueio na lista de tokens bloqueados no Redis
 	key := "blocked:" + token
-	if err := limiter.RedisClient.Set(ctx, key, unblockTime.Unix(), blockPeriod).Err(); err != nil {
+	if err := limiter.Storage.Set(ctx, key, unblockTime.Unix(), blockPeriod); err != nil {
 		log.Printf("Error blocking token %s: %v", token, err)
 	}
 	// Definir o tempo de expiração para a chave
-	if err := limiter.RedisClient.Expire(ctx, key, blockPeriod).Err(); err != nil {
+	if err := limiter.Storage.Expire(ctx, key, blockPeriod); err != nil {
 		log.Printf("Error setting expiration for token %s: %v", token, err)
 	}
 }
@@ -177,9 +228,9 @@ func (limiter *RateLimiter) blockToken(token string) {
 // isTokenBlocked verifica se o token está na lista de bloqueio
 func (limiter *RateLimiter) isTokenBlocked(token string) bool {
 	// Verifica se o token está na lista de tokens bloqueados no Redis
-	blockTimeStr, err := limiter.RedisClient.Get(context.Background(), "blocked:"+token).Result()
-	if err != nil && err != redis.Nil {
-		log.Printf("Error getting block time for token %s: %v", token, err)
+	blockTimeStr, err := limiter.Storage.Get(context.Background(), "blocked:"+token)
+	if err != nil { //&& err != redis.Nil {
+		//		log.Printf("Error getting block time for token %s: %v", token, err)
 		return false
 	}
 	if blockTimeStr != "" {
@@ -196,7 +247,7 @@ func (limiter *RateLimiter) isTokenBlocked(token string) bool {
 			return true
 		}
 		// Remove o token da lista de tokens bloqueados no Redis
-		_, err = limiter.RedisClient.Del(context.Background(), "blocked:"+token).Result()
+		_, err = limiter.Storage.Del(context.Background(), "blocked:"+token)
 		if err != nil {
 			log.Printf("Error removing token %s from block list: %v", token, err)
 		}
@@ -320,21 +371,23 @@ func (limiter *RateLimiter) Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-func main() {
-	// Inicializa o cliente Redis
+func newBDClient() *redis.Client {
 	client := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379", // Endereço padrão do servidor Redis
 	})
-	defer client.Close() // Fechar o cliente Redis quando não estiver mais em uso
-
-	// Verifica a conexão com o servidor Redis
-	ctx := context.Background()
-	_, err := client.Ping(ctx).Result()
+	_, err := client.Ping(context.Background()).Result()
 	if err != nil {
 		log.Fatalf("Error connecting to Redis: %v", err)
 	}
 	log.Printf("Connected to Redis")
+	return client
+}
+
+func main() {
+	// Inicializa o cliente de Persistência
+	client := newBDClient()
+
+	defer client.Close() // Fechar o cliente do BD quando não estiver mais em uso
 
 	//Configuração padrão
 	cfg := Config{
@@ -346,7 +399,8 @@ func main() {
 	numeroMaximodeTokens := 10
 	// Carrega as configurações dos tokens do arquivo .env
 	tokenConfigs := LoadTokenConfigs(cfg, numeroMaximodeTokens)
-
+	// Inicializa o rate limiter com o cliente Redis
+	bdStorage := NewBDStorage(client)
 	// Inicializa o rate limiter com o cliente Redis
 	limiter := &RateLimiter{
 		Config:         cfg,
@@ -355,7 +409,7 @@ func main() {
 		BlockedIPs:     make(map[string]time.Time),
 		BlockedTokens:  make(map[string]time.Time),
 		TokenConfigs:   tokenConfigs,
-		RedisClient:    client,
+		Storage:        bdStorage,
 	}
 
 	// Configura o roteador Chi
@@ -363,9 +417,12 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(limiter.Middleware)
 
-	// Rota de exemplo
+	// Rota para o teste
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello, World!"))
+	})
+	r.Get("/teste", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Olá! Tudo Bem Comigo!"))
 	})
 
 	// Servidor HTTP na porta 8080

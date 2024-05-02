@@ -46,8 +46,8 @@ para cada conjunto de variáveis de 0 a 9(para aumentar a quantidade de token al
 # Orientações para execução do programa
 
 Executar o programa: no diretório rate-limiter executar a linha de comando go run rate-limiter.go
-Para chamar o programa rate-limiter.go passando o token: curl -X GET <http://localhost:8080/> -H "API_KEY: token1"
-Parar chamar o programa via web : localhost:8080
+Para chamar o programa rate-limiter.go passando o token: curl -X GET <http://localhost:8080/> -H "API_KEY: token1" ou curl http://localhost:8080 -H "API_KEY: token2"
+Parar chamar o programa via web : localhost:8080 e vc pode chamar o localhost:8080/teste também (em caso de bloqueio do ip ou do tokem bloqueia todas as chamadas)
 
 # Objetivo da funcionalidade
 
@@ -71,6 +71,7 @@ Código HTTP: 429
 Mensagem: you have reached the maximum number of requests or actions allowed within a certain time frame
 Todas as informações de "limiter” devem ser armazenadas e consultadas de um banco de dados Redis. Você pode utilizar docker-compose para subir o Redis.
 Crie uma “strategy” que permita trocar facilmente o Redis por outro mecanismo de persistência.
+Para tornar o Rate Limiter flexível para substituir facilmente o Redis por outro mecanismo de persistência, criamos uma interface que encapsula as operações de persistência relacionadas ao Redis e, em seguida, implementamos essa interface para o Redis. Isso torna o Rate Limiter mais flexível, pois agora ele pode usar qualquer mecanismo de persistência que implemente a interface Storage. Na func main a func newBDClient() inicializa o clliente de persistência, que pode ser qualquer um. Agora não é mais necessário alterar a lógica do programa para trocar o Redis por outro mecanismo de persistência.
 A lógica do limiter deve estar separada do middleware.
 Exemplos:
 
