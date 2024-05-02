@@ -37,13 +37,19 @@ TOKEN3_TOKEN_BLOCK_PERIOD=1m
 
 para cada conjunto de variáveis de 0 a 9(para aumentar a quantidade de token alterar ), serão passadas as informações do nome do token, a quantidade máxima de requisições por segundo e o tempo de bloqueio quando ultrapassar o limite. Se não for definido um token "padrao" o programa pegará o Default definido dentro do programa:
 
+# Configurações para o token 'Default'
+
   MaxRequests:      4,               // Número máximo de requisições permitidas por segundo
   IPBlockPeriod:    2 *time.Minute, // Período de bloqueio para IPs
   TokenBlockPeriod: 3* time.Minute, // Período de bloqueio para tokens
 
+# Orientações para execução do programa
+
 Executar o programa: no diretório rate-limiter executar a linha de comando go run rate-limiter.go
 Para chamar o programa rate-limiter.go passando o token: curl -X GET <http://localhost:8080/> -H "API_KEY: token1"
 Parar chamar o programa via web : localhost:8080
+
+# Objetivo da funcionalidade
 
 Objetivo: Desenvolver um rate limiter em Go que possa ser configurado para limitar o número máximo de requisições por segundo com base em um endereço IP específico ou em um token de acesso.
 
